@@ -76,6 +76,10 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
+          # lint-and-test already saves this cache under the same key. Pruning here
+          # walks the cache while the background services still hold files in it,
+          # which fails the post step even when the smoke test passed.
+          prune-cache: false
 
       - run: uv sync --frozen --extra worker --extra bench --extra dev
 
@@ -108,3 +112,7 @@ jobs:
       - name: Service logs
         if: failure()
         run: tail -n 100 ci-logs/*.log
+
+      - name: Stop services
+        if: always()
+        run: pkill -f "uvicorn|cpu_worker" || true
