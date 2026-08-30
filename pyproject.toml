@@ -36,11 +36,12 @@ bench = [
 ]
 # Ray Serve + Ray Data. Pin the minor version the day serve_app.py first works.
 ray = [
-    "ray[serve,data]>=2.44",
+    # Linux-only by construction: these run inside WSL2 next to the GPU.
+    "ray[serve,data]>=2.44 ; sys_platform == 'linux'",
 ]
 # GPU engine — install inside WSL2 only. Pin after the Week-1 Day-1 smoke test.
 gpu = [
-    "vllm>=0.10",
+    "vllm>=0.10 ; sys_platform == 'linux'",
 ]
 # Durable result store (optional at runtime: the service degrades without it).
 db = [

@@ -2,8 +2,8 @@
 # vLLM / Triton / Ray / KServe each ship their own image and run outside compose,
 # one at a time, on the single 3060.
 #
-#   docker build -f infra/docker/Dockerfile --target gateway -t ocr-gateway .
-#   docker build -f infra/docker/Dockerfile --target worker  -t ocr-worker  .
+#   docker build -f deploy/docker/Dockerfile --target gateway -t ocr-gateway .
+#   docker build -f deploy/docker/Dockerfile --target worker  -t ocr-worker  .
 
 FROM python:3.12-slim AS base
 ENV PYTHONUNBUFFERED=1 \
@@ -17,14 +17,16 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends libglib2.0-0 curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Dependency layer first: source changes must not re-resolve the wheel set.
+# Install from pyproject rather than a hand-copied dependency list: one source of
+# truth, no drift. A src-layout build needs the package present, so src/ is copied
+# before the install — code changes do re-resolve wheels, which is the price of not
+# maintaining the dependency set twice.
 COPY pyproject.toml README.md ./
-RUN pip install --no-cache-dir \n      fastapi "uvicorn[standard]" redis pydantic pydantic-settings python-multipart \n      httpx orjson prometheus-client pymupdf opencv-python-headless numpy pillow \n      onnxruntime asyncpg \n    && rm -rf /root/.cache
-
 COPY src ./src
+RUN pip install --no-cache-dir ".[worker,db]" && rm -rf /root/.cache
+
 COPY benchmarks ./benchmarks
 COPY scripts ./scripts
-RUN pip install --no-cache-dir --no-deps -e . && rm -rf /root/.cache
 
 RUN useradd --create-home --uid 10001 ocr \
     && mkdir -p /data/storage \
