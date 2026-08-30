@@ -1,0 +1,37 @@
+# Quantized OCR model as a KServe InferenceService (huggingface runtime, vLLM backend).
+# Week 3 Day 3. RawDeployment mode -> plain Deployment + Service + HPA underneath.
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: ocr-vlm
+  annotations:
+    serving.kserve.io/deploymentMode: RawDeployment
+    serving.kserve.io/autoscalerClass: hpa
+spec:
+  predictor:
+    minReplicas: 1
+    maxReplicas: 2
+    scaleMetric: cpu        # raw-deployment HPA basics; custom metrics = stretch goal
+    scaleTarget: 80
+    model:
+      modelFormat:
+        name: huggingface
+      args:
+        - --model_name=ocr
+        # AWQ-int4 build from the llm-compressor step (or a prequantized repo):
+        - --model_id=<your-hf-user>/PaddleOCR-VL-AWQ-int4
+        - --backend=vllm
+        - --max-model-len=8192
+        - --gpu-memory-utilization=0.85
+        - --trust-remote-code
+      resources:
+        requests:
+          cpu: "2"
+          memory: 8Gi
+          nvidia.com/gpu: "1"
+        limits:
+          cpu: "4"
+          memory: 12Gi
+          nvidia.com/gpu: "1"
+  # k8s device plugin allocates whole GPUs — fractional GPU here needs the
+  # device-plugin time-slicing ConfigMap (note it in the blog; don't build it).

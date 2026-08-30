@@ -1,0 +1,33 @@
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.ruff_cache/
+.pytest_cache/
+.pytest-tmp/
+
+# env / secrets
+.env
+*.pem
+kubeconfig*
+
+# runtime artifacts
+storage/
+benchmarks/results/*.json
+benchmarks/corpus/pages/
+models/
+*.onnx
+*.parquet
+smoke-sample.pdf
+
+# monitoring state
+monitoring/grafana/data/
+monitoring/prometheus/data/
+
+# os / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

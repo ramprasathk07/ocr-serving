@@ -1,0 +1,138 @@
+# Infra + the two CPU services. The GPU engine (vLLM / Triton / Ray Serve / KServe)
+# runs OUTSIDE compose — one stack at a time on the single 3060 — and is reached at
+# OCR_ENGINE_BASE_URL. `make down-gpu` before switching stacks.
+#
+#   docker compose up -d                      redis, postgres, prometheus, grafana
+#   docker compose --profile app up -d        + gateway + worker
+#   docker compose --profile mock up -d       + CPU mock engine (no GPU needed)
+#   docker compose --profile gpu up -d        + dcgm-exporter (GPU metrics)
+name: ocr-serving
+
+x-app-env: &app-env
+  OCR_REDIS_URL: redis://redis:6379/0
+  OCR_POSTGRES_DSN: postgresql://ocr:ocr@postgres:5432/ocr
+  OCR_ENGINE_BASE_URL: ${OCR_ENGINE_BASE_URL:-http://host.docker.internal:8001/v1}
+  OCR_MODEL_ID: ${OCR_MODEL_ID:-PaddlePaddle/PaddleOCR-VL}
+  OCR_API_KEYS: ${OCR_API_KEYS:-dev-key}
+  OCR_LOG_FORMAT: json
+  OCR_ENV: dev
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    # appendonly: queued jobs and their state survive a restart of this container.
+    command: redis-server --appendonly yes --maxmemory-policy noeviction
+    volumes: [redis-data:/data]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  postgres:
+    image: postgres:16-alpine
+    ports: ["5432:5432"]
+    environment:
+      POSTGRES_USER: ocr
+      POSTGRES_PASSWORD: ocr
+      POSTGRES_DB: ocr
+    volumes: [pg-data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ocr"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  gateway:
+    profiles: [app]
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile
+      target: gateway
+    ports: ["8080:8080"]
+    environment: *app-env
+    volumes: [storage:/data/storage]
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    depends_on:
+      redis: {condition: service_healthy}
+    restart: unless-stopped
+    init: true
+
+  worker:
+    profiles: [app]
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile
+      target: worker
+    environment:
+      <<: *app-env
+      OCR_WORKER_CONCURRENCY: ${OCR_WORKER_CONCURRENCY:-2}
+      OCR_PAGE_CONCURRENCY: ${OCR_PAGE_CONCURRENCY:-2}
+    ports: ["9101:9101"]
+    volumes: [storage:/data/storage]
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    depends_on:
+      redis: {condition: service_healthy}
+    restart: unless-stopped
+    init: true
+    # Scale horizontally; the consumer group hands each job to exactly one worker.
+    # docker compose --profile app up -d --scale worker=3
+
+  mock-engine:
+    profiles: [mock]
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile
+      target: mock-engine
+    ports: ["8001:8001"]
+    environment:
+      MOCK_TTFT_MS: ${MOCK_TTFT_MS:-120}
+      MOCK_TOKEN_MS: ${MOCK_TOKEN_MS:-8}
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports: ["9090:9090"]
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=15d
+      - --web.enable-lifecycle
+    volumes:
+      - ./deploy/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prom-data:/prometheus
+    extra_hosts: ["host.docker.internal:host-gateway"]
+
+  grafana:
+    image: grafana/grafana:latest
+    ports: ["3000:3000"]
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/provisioning/dashboards/ocr-pipeline.json
+    volumes:
+      - ./deploy/monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    depends_on: [prometheus]
+
+  # GPU metrics. Needs nvidia-container-toolkit in WSL2 docker.
+  dcgm-exporter:
+    image: nvcr.io/nvidia/k8s/dcgm-exporter:latest
+    profiles: [gpu]
+    ports: ["9400:9400"]
+    cap_add: [SYS_ADMIN]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  redis-data:
+  pg-data:
+  grafana-data:
+  prom-data:
+  storage:

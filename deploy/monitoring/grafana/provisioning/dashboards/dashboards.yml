@@ -1,0 +1,13 @@
+# Dashboards are provisioned from this directory: edits land in git, not in a database.
+apiVersion: 1
+providers:
+  - name: ocr
+    orgId: 1
+    folder: OCR
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: false

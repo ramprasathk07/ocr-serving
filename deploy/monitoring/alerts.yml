@@ -1,0 +1,62 @@
+# Alerting rules. Thresholds are sized for a single-GPU workstation, not a fleet:
+# the point is that the pipeline tells you when it is unhealthy instead of going
+# quiet. Wire them to Alertmanager (or just watch them in Prometheus /alerts).
+groups:
+  - name: ocr-pipeline
+    rules:
+      - alert: GatewayDown
+        expr: up{job="gateway"} == 0
+        for: 1m
+        labels: {severity: critical}
+        annotations:
+          summary: "Gateway is not being scraped"
+          description: "No /metrics from the gateway for 1 minute — the API is likely down."
+
+      - alert: NoWorkerRunning
+        expr: absent(ocr_jobs_inflight) or up{job="worker"} == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: "No CPU worker is up"
+          description: "Jobs will queue forever: nothing is consuming ocr:jobs."
+
+      - alert: QueueBacklogGrowing
+        expr: ocr_queue_depth > 20
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "Queue depth {{ $value }} for 5 minutes"
+          description: "Workers cannot keep up. Scale workers or check the engine."
+
+      - alert: JobsDeadLettered
+        expr: increase(ocr_jobs_dead_lettered_total[15m]) > 0
+        labels: {severity: warning}
+        annotations:
+          summary: "Jobs moved to the dead-letter stream"
+          description: "Inspect: redis-cli XRANGE ocr:jobs:dead - +"
+
+      - alert: EngineErrorRateHigh
+        expr: >
+          sum(rate(ocr_engine_requests_total{outcome="error"}[5m]))
+          / clamp_min(sum(rate(ocr_engine_requests_total[5m])), 0.001) > 0.1
+        for: 5m
+        labels: {severity: critical}
+        annotations:
+          summary: "Over 10% of engine requests are failing"
+          description: "The active serving stack is unhealthy or out of VRAM."
+
+      - alert: TTFTRegression
+        expr: histogram_quantile(0.95, sum(rate(ocr_ttft_seconds_bucket[10m])) by (le)) > 10
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "TTFT p95 above 10s"
+          description: "Check GPU contention, batch size, and queue depth."
+
+      - alert: GPUMemoryNearlyFull
+        expr: DCGM_FI_DEV_FB_USED / clamp_min(DCGM_FI_DEV_FB_USED + DCGM_FI_DEV_FB_FREE, 1) > 0.95
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "GPU memory above 95%"
+          description: "Two stacks may be running at once — `make down-gpu` first."

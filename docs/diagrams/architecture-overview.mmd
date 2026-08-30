@@ -1,0 +1,52 @@
+%% Overview diagram embedded in README.md (GitHub renders mermaid natively).
+%% The detailed, editable version is docs/architecture.drawio.
+flowchart LR
+    subgraph client["Client"]
+        UI["Browser UI / SDK / curl"]
+    end
+
+    subgraph gw["Gateway · FastAPI :8080"]
+        API["POST /v1/ocr<br/>auth · tenant quota · rate limit<br/>streamed upload → 202 + job_id"]
+        STREAM["GET /stream (SSE, Last-Event-ID)<br/>WS /ws · artifacts · /metrics"]
+    end
+
+    subgraph redis["Redis"]
+        QUEUE[["ocr:jobs<br/>stream + consumer group"]]
+        STATE[("job:{id}<br/>state hash")]
+        EVENTS[["job:{id}:events<br/>replayable stream"]]
+    end
+
+    subgraph worker["CPU worker · at-least-once, reclaim, DLQ"]
+        CLS{"classify page<br/>native text? blank? duplicate?"}
+        PIPE["render @ adaptive DPI → deskew → CLAHE<br/>layout (DocYOLO ONNX) → tile regions"]
+        POST["stitch → normalise → merge pages"]
+        ART["JSON · Markdown · searchable PDF"]
+    end
+
+    subgraph engine["Serving stack — one at a time on the 3060"]
+        E["vLLM · Triton · Ray Serve · KServe<br/>(or CPU mock)<br/>OpenAI /v1/chat/completions"]
+    end
+
+    subgraph store["Durable stores"]
+        BLOB[("blob store")]
+        PG[("PostgreSQL")]
+    end
+
+    UI -->|"1 upload"| API
+    API -->|"2 XADD"| QUEUE
+    API --> STATE
+    API --> BLOB
+    QUEUE -->|"3 XREADGROUP"| CLS
+    BLOB -.-> CLS
+    CLS -->|"needs OCR"| PIPE
+    CLS -.->|"skip GPU"| POST
+    PIPE -->|"4 region PNG, streamed"| E
+    E -->|"5 token deltas"| POST
+    PIPE -->|"token batches"| EVENTS
+    POST --> ART
+    ART --> BLOB
+    ART --> PG
+    POST --> STATE
+    EVENTS -->|"6 tail from Last-Event-ID"| STREAM
+    STREAM -->|"7 live tokens, pages, progress"| UI
+    BLOB -.->|"results"| STREAM

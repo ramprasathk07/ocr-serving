@@ -1,0 +1,14 @@
+# Triton vLLM backend — engine args live in 1/model.json.
+backend: "vllm"
+
+# Streaming responses require decoupled mode.
+model_transaction_policy {
+  decoupled: True
+}
+
+instance_group [
+  {
+    count: 1
+    kind: KIND_MODEL
+  }
+]

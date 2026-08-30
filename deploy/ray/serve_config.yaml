@@ -1,0 +1,15 @@
+# Declarative alternative to `serve run` — deploy with: serve deploy serving/ray/serve_config.yaml
+# Dump the live config after tuning with: serve config
+proxy_location: EveryNode
+
+http_options:
+  host: 0.0.0.0
+  port: 8000
+
+applications:
+  - name: ocr
+    route_prefix: /
+    import_path: serving.ray.serve_app:app
+    runtime_env:
+      env_vars:
+        OCR_MODEL_ID: "PaddlePaddle/PaddleOCR-VL"

@@ -1,0 +1,50 @@
+# Scrape targets. `host.docker.internal` reaches processes running on the host
+# (gateway/worker started with `make gateway` / `make worker`, and whichever
+# serving stack currently owns the GPU).
+global:
+  scrape_interval: 5s
+  evaluation_interval: 15s
+  external_labels:
+    project: ocr-serving
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  - job_name: gateway
+    static_configs:
+      - targets: ["gateway:8080", "host.docker.internal:8080"]
+    honor_labels: true
+
+  - job_name: worker
+    static_configs:
+      - targets: ["worker:9101", "host.docker.internal:9101"]
+
+  # --- serving stacks: exactly one of these is up at a time ------------------
+  # vLLM standalone exposes /metrics on its serving port.
+  - job_name: vllm
+    static_configs:
+      - targets: ["host.docker.internal:8001"]
+
+  # Ray: start the cluster with --metrics-export-port=8090, then Serve/vLLM
+  # metrics land on that port (see Ray observability docs).
+  - job_name: ray
+    static_configs:
+      - targets: ["host.docker.internal:8090"]
+
+  - job_name: triton
+    static_configs:
+      - targets: ["host.docker.internal:8002"]
+
+  # KServe (RawDeployment) — the predictor pod's port-forwarded metrics endpoint.
+  - job_name: kserve
+    static_configs:
+      - targets: ["host.docker.internal:8081"]
+
+  - job_name: dcgm
+    static_configs:
+      - targets: ["dcgm-exporter:9400", "host.docker.internal:9400"]
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

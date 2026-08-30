@@ -1,0 +1,26 @@
+# Canary manifest + honest note (Week 3 Day 4).
+#
+# canaryTrafficPercent splits traffic between the previous and latest revision.
+# CAVEAT: real traffic-splitting needs Serverless mode (Knative revisions) or
+# Gateway-API-backed raw mode on recent KServe. On plain k3s RawDeployment this
+# manifest documents the rollout story; the blog notes where the split executes.
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: ocr-vlm
+  annotations:
+    serving.kserve.io/deploymentMode: RawDeployment
+spec:
+  predictor:
+    canaryTrafficPercent: 10
+    model:
+      modelFormat:
+        name: huggingface
+      args:
+        - --model_name=ocr
+        - --model_id=<your-hf-user>/PaddleOCR-VL-AWQ-int4   # new candidate revision
+        - --backend=vllm
+        - --max-model-len=8192
+      resources:
+        limits:
+          nvidia.com/gpu: "1"

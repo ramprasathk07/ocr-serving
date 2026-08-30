@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>XFinite-OCR — streaming demo</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #0f1115; --panel: #171a21; --line: #262b36; --fg: #e6e9ef;
+    --muted: #8b93a7; --accent: #6ea8fe; --ok: #4ade80; --warn: #fbbf24; --err: #f87171;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.5 system-ui, sans-serif; }
+  header { padding: 18px 24px; border-bottom: 1px solid var(--line); display: flex;
+           align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  h1 { font-size: 16px; margin: 0; letter-spacing: .01em; }
+  .sub { color: var(--muted); font-size: 12px; }
+  main { display: grid; grid-template-columns: 320px 1fr; gap: 0; height: calc(100vh - 61px); }
+  @media (max-width: 780px) { main { grid-template-columns: 1fr; height: auto; } }
+  aside { border-right: 1px solid var(--line); padding: 18px; display: flex;
+          flex-direction: column; gap: 14px; }
+  section { padding: 18px 24px; overflow: auto; }
+  label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  input[type=text], input[type=password] { width: 100%; padding: 8px 10px; border-radius: 6px;
+    border: 1px solid var(--line); background: var(--panel); color: var(--fg); font: inherit; }
+  #drop { border: 1px dashed var(--line); border-radius: 10px; padding: 26px 16px;
+    text-align: center; color: var(--muted); cursor: pointer; background: var(--panel); }
+  #drop.hot { border-color: var(--accent); color: var(--fg); }
+  button { padding: 9px 14px; border-radius: 6px; border: 1px solid var(--line);
+    background: var(--accent); color: #08111f; font: 600 13px system-ui; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button.ghost { background: transparent; color: var(--fg); }
+  .stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .stat { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+  .stat b { display: block; font: 600 18px/1.2 var(--mono); }
+  .stat span { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  #pages { display: flex; flex-direction: column; gap: 14px; }
+  .page { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+  .page h3 { margin: 0; padding: 8px 12px; font: 600 12px var(--mono); color: var(--muted);
+             border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; }
+  .page pre { margin: 0; padding: 12px; white-space: pre-wrap; word-break: break-word;
+              font: 12.5px/1.6 var(--mono); max-height: 420px; overflow: auto; }
+  .cursor::after { content: "▋"; color: var(--accent); animation: blink 1s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  #log { font: 11.5px/1.5 var(--mono); color: var(--muted); max-height: 160px; overflow: auto;
+         background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
+  .badge { font: 600 11px var(--mono); padding: 2px 7px; border-radius: 999px; border: 1px solid var(--line); }
+  .queued { color: var(--muted); } .processing { color: var(--accent); }
+  .completed { color: var(--ok); } .failed, .cancelled { color: var(--err); }
+</style>
+</head>
+<body>
+<header>
+  <h1>XFinite-OCR</h1>
+  <span class="sub">streaming OCR · one model, four serving stacks</span>
+  <span class="sub" id="engine"></span>
+</header>
+<main>
+  <aside>
+    <div>
+      <label for="key">API key</label>
+      <input id="key" type="password" value="dev-key" autocomplete="off">
+    </div>
+    <div id="drop">Drop a PDF or image<br><span class="sub">or click to choose</span></div>
+    <input id="file" type="file" accept=".pdf,.png,.jpg,.jpeg,.tiff,.webp" hidden>
+    <div style="display:flex; gap:8px">
+      <button id="go" disabled>Run OCR</button>
+      <button id="cancel" class="ghost" disabled>Cancel</button>
+    </div>
+    <div class="stats">
+      <div class="stat"><b id="s-status">idle</b><span>status</span></div>
+      <div class="stat"><b id="s-ttft">–</b><span>ttft</span></div>
+      <div class="stat"><b id="s-pages">0/0</b><span>pages</span></div>
+      <div class="stat"><b id="s-tps">–</b><span>chars/s</span></div>
+    </div>
+    <div id="log"></div>
+  </aside>
+  <section>
+    <div id="pages"></div>
+  </section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const drop = $("drop"), fileInput = $("file");
+let picked = null, jobId = null, source = null, t0 = 0, firstToken = 0, chars = 0;
+
+const log = (msg) => {
+  const line = document.createElement("div");
+  line.textContent = new Date().toLocaleTimeString() + "  " + msg;
+  $("log").prepend(line);
+};
+
+drop.onclick = () => fileInput.click();
+drop.ondragover = (e) => { e.preventDefault(); drop.classList.add("hot"); };
+drop.ondragleave = () => drop.classList.remove("hot");
+drop.ondrop = (e) => { e.preventDefault(); drop.classList.remove("hot"); pick(e.dataTransfer.files[0]); };
+fileInput.onchange = () => pick(fileInput.files[0]);
+
+function pick(f) {
+  if (!f) return;
+  picked = f;
+  drop.innerHTML = `<b>${f.name}</b><br><span class="sub">${(f.size / 1024).toFixed(0)} KB</span>`;
+  $("go").disabled = false;
+}
+
+function pageBox(index) {
+  let box = document.getElementById("page-" + index);
+  if (box) return box;
+  box = document.createElement("div");
+  box.className = "page";
+  box.id = "page-" + index;
+  box.innerHTML = `<h3><span>page ${index + 1}</span><span class="badge" id="meta-${index}">streaming</span></h3><pre class="cursor" id="txt-${index}"></pre>`;
+  $("pages").appendChild(box);
+  return box;
+}
+
+function setStatus(state) {
+  const el = $("s-status");
+  el.textContent = state;
+  el.className = state;
+}
+
+$("go").onclick = async () => {
+  if (!picked) return;
+  $("pages").innerHTML = ""; $("log").innerHTML = "";
+  chars = 0; firstToken = 0; $("s-ttft").textContent = "–"; $("s-tps").textContent = "–";
+  const body = new FormData();
+  body.append("file", picked);
+  $("go").disabled = true;
+  t0 = performance.now();
+  try {
+    const res = await fetch("/v1/ocr", { method: "POST", body, headers: { "X-API-Key": $("key").value } });
+    if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
+    const job = await res.json();
+    jobId = job.job_id;
+    setStatus("queued");
+    $("cancel").disabled = false;
+    log("job " + jobId + " accepted");
+    listen(jobId);
+  } catch (err) {
+    setStatus("failed"); log("error: " + err.message); $("go").disabled = false;
+  }
+};
+
+$("cancel").onclick = async () => {
+  if (!jobId) return;
+  await fetch("/v1/ocr/" + jobId, { method: "DELETE", headers: { "X-API-Key": $("key").value } });
+  log("cancel requested");
+};
+
+// EventSource cannot set headers, so the demo uses fetch + a manual SSE reader.
+async function listen(id) {
+  const res = await fetch(`/v1/ocr/${id}/stream`, { headers: { "X-API-Key": $("key").value } });
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const frames = buffer.split("\n\n");
+    buffer = frames.pop();
+    for (const frame of frames) handleFrame(frame);
+  }
+  $("go").disabled = false; $("cancel").disabled = true;
+}
+
+function handleFrame(frame) {
+  const evt = {};
+  for (const line of frame.split("\n")) {
+    if (line.startsWith("event:")) evt.type = line.slice(6).trim();
+    else if (line.startsWith("data:")) evt.data = line.slice(5).trim();
+  }
+  if (!evt.type || !evt.data) return;
+  let payload = {};
+  try { payload = JSON.parse(evt.data); } catch { return; }
+
+  if (evt.type === "token") {
+    pageBox(payload.page);
+    const pre = $("txt-" + payload.page);
+    pre.textContent += payload.data;
+    chars += payload.data.length;
+    if (!firstToken) {
+      firstToken = performance.now();
+      $("s-ttft").textContent = ((firstToken - t0) / 1000).toFixed(2) + "s";
+    }
+    $("s-tps").textContent = (chars / ((performance.now() - firstToken) / 1000)).toFixed(0);
+  } else if (evt.type === "page_started") {
+    pageBox(payload.page);
+    setStatus("processing");
+  } else if (evt.type === "page_complete") {
+    pageBox(payload.page);
+    $("txt-" + payload.page).textContent = payload.data;
+    $("txt-" + payload.page).classList.remove("cursor");
+    $("meta-" + payload.page).textContent = payload.data.length + " chars";
+  } else if (evt.type === "progress") {
+    $("s-pages").textContent = payload.data;
+  } else if (evt.type === "job_complete") {
+    setStatus("completed"); log("done — " + payload.data + " pages");
+    document.querySelectorAll(".cursor").forEach((el) => el.classList.remove("cursor"));
+  } else if (evt.type === "job_failed") {
+    setStatus("failed"); log("failed: " + payload.data);
+  } else if (evt.type === "job_cancelled") {
+    setStatus("cancelled"); log("cancelled");
+  } else if (evt.type === "status") {
+    setStatus(payload.status);
+  }
+}
+
+fetch("/readyz").then((r) => r.json()).then((h) => {
+  $("engine").textContent = `engine ${h.checks.engine} · redis ${h.checks.redis} · pg ${h.checks.postgres}`;
+}).catch(() => {});
+</script>
+</body>
+</html>

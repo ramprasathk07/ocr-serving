@@ -1,0 +1,286 @@
+{
+  "uid": "ocr-pipeline",
+  "title": "OCR pipeline",
+  "description": "Gateway, queue, CPU worker and the active serving stack. Provisioned from monitoring/grafana/provisioning/dashboards/ — edit the file, not the UI.",
+  "tags": ["ocr", "serving"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "refresh": "10s",
+  "time": { "from": "now-30m", "to": "now" },
+  "templating": { "list": [] },
+  "panels": [
+    {
+      "type": "row",
+      "title": "Service level",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "title": "Jobs completed / min",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "decimals": 1, "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "text", "value": null }] } },
+        "overrides": []
+      },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(ocr_jobs_total{status=\"completed\"}[5m])) * 60",
+          "legendFormat": "completed" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Failed jobs / min",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 1 },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "decimals": 2, "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute",
+            "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 0.01 }] } },
+        "overrides": []
+      },
+      "targets": [
+        { "refId": "A",
+          "expr": "sum(rate(ocr_jobs_total{status=~\"failed|cancelled\"}[5m])) * 60",
+          "legendFormat": "failed" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "TTFT p95",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 1 },
+      "fieldConfig": {
+        "defaults": { "unit": "s", "decimals": 2, "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute",
+            "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 3 },
+                      { "color": "red", "value": 10 }] } },
+        "overrides": []
+      },
+      "targets": [
+        { "refId": "A",
+          "expr": "histogram_quantile(0.95, sum(rate(ocr_ttft_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p95" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Queue depth",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 1 },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "decimals": 0, "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute",
+            "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 10 },
+                      { "color": "red", "value": 25 }] } },
+        "overrides": []
+      },
+      "targets": [{ "refId": "A", "expr": "max(ocr_queue_depth)", "legendFormat": "queued" }]
+    },
+    {
+      "type": "stat",
+      "title": "Pages / min",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 1 },
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 1 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(ocr_pages_total[5m])) * 60", "legendFormat": "pages" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Streaming clients",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 1 },
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum(ocr_stream_clients) by (transport)",
+          "legendFormat": "{{transport}}" }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Latency",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Time to first token",
+      "description": "Measured to the first content delta from the serving stack, not the first HTTP byte.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "fieldConfig": {
+        "defaults": { "unit": "s", "custom": { "lineWidth": 2, "fillOpacity": 8 } },
+        "overrides": []
+      },
+      "targets": [
+        { "refId": "A",
+          "expr": "histogram_quantile(0.50, sum(rate(ocr_ttft_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p50" },
+        { "refId": "B",
+          "expr": "histogram_quantile(0.95, sum(rate(ocr_ttft_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p95" },
+        { "refId": "C",
+          "expr": "histogram_quantile(0.99, sum(rate(ocr_ttft_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p99" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Page and job latency",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "fieldConfig": {
+        "defaults": { "unit": "s", "custom": { "lineWidth": 2, "fillOpacity": 8 } },
+        "overrides": []
+      },
+      "targets": [
+        { "refId": "A",
+          "expr": "histogram_quantile(0.95, sum(rate(ocr_page_seconds_bucket[5m])) by (le))",
+          "legendFormat": "page p95" },
+        { "refId": "B",
+          "expr": "histogram_quantile(0.95, sum(rate(ocr_job_seconds_bucket[5m])) by (le))",
+          "legendFormat": "job p95" },
+        { "refId": "C",
+          "expr": "histogram_quantile(0.95, sum(rate(ocr_queue_wait_seconds_bucket[5m])) by (le))",
+          "legendFormat": "queue wait p95" },
+        { "refId": "D",
+          "expr": "histogram_quantile(0.95, sum(rate(ocr_render_seconds_bucket[5m])) by (le))",
+          "legendFormat": "render+preprocess p95" }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Throughput and work mix",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Pages by source",
+      "description": "native / duplicate / blank pages never reach the GPU — this is where the throughput wins come from.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 15 },
+      "fieldConfig": {
+        "defaults": { "unit": "short",
+          "custom": { "lineWidth": 1, "fillOpacity": 40, "stacking": { "mode": "normal" } } },
+        "overrides": []
+      },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(ocr_pages_total[5m])) by (source) * 60",
+          "legendFormat": "{{source}}" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Engine tokens/s and in-flight",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 15 },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "lineWidth": 2, "fillOpacity": 8 } },
+        "overrides": []
+      },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(ocr_engine_tokens_total[1m]))",
+          "legendFormat": "output tokens/s" },
+        { "refId": "B", "expr": "sum(ocr_engine_inflight)", "legendFormat": "in-flight requests" },
+        { "refId": "C", "expr": "sum(rate(ocr_engine_retries_total[5m])) * 60",
+          "legendFormat": "retries/min" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Queue",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 15 },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "lineWidth": 2, "fillOpacity": 8 } },
+        "overrides": []
+      },
+      "targets": [
+        { "refId": "A", "expr": "max(ocr_queue_depth)", "legendFormat": "waiting" },
+        { "refId": "B", "expr": "max(ocr_queue_pending)", "legendFormat": "in flight (unacked)" },
+        { "refId": "C", "expr": "max(ocr_queue_dead)", "legendFormat": "dead-lettered" },
+        { "refId": "D", "expr": "sum(ocr_jobs_inflight)", "legendFormat": "jobs processing" }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "API and GPU",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 23 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "HTTP requests by status",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 24 },
+      "fieldConfig": {
+        "defaults": { "unit": "reqps", "custom": { "lineWidth": 1, "fillOpacity": 30,
+          "stacking": { "mode": "normal" } } },
+        "overrides": []
+      },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(ocr_http_requests_total[5m])) by (status)",
+          "legendFormat": "{{status}}" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Gateway latency p95 by route",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 24 },
+      "fieldConfig": {
+        "defaults": { "unit": "s", "custom": { "lineWidth": 2, "fillOpacity": 0 } },
+        "overrides": []
+      },
+      "targets": [
+        { "refId": "A",
+          "expr": "histogram_quantile(0.95, sum(rate(ocr_http_request_seconds_bucket{path!~\"/metrics|/healthz|/readyz\"}[5m])) by (le, path))",
+          "legendFormat": "{{path}}" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "GPU (dcgm-exporter)",
+      "description": "Empty unless `docker compose --profile gpu up -d` is running.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 24 },
+      "fieldConfig": {
+        "defaults": { "unit": "percent", "custom": { "lineWidth": 2, "fillOpacity": 8 } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "VRAM used (MiB)" },
+            "properties": [{ "id": "unit", "value": "decmbytes" }] }
+        ]
+      },
+      "targets": [
+        { "refId": "A", "expr": "avg(DCGM_FI_DEV_GPU_UTIL)", "legendFormat": "GPU util %" },
+        { "refId": "B", "expr": "avg(DCGM_FI_DEV_FB_USED)", "legendFormat": "VRAM used (MiB)" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Rejected requests (auth / rate limit / quota / size)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 32 },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "lineWidth": 1, "fillOpacity": 30,
+          "stacking": { "mode": "normal" } } },
+        "overrides": []
+      },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(ocr_rate_limited_total[5m])) by (reason) * 60",
+          "legendFormat": "{{reason}}/min" }
+      ]
+    }
+  ]
+}

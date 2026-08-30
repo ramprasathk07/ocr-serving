@@ -1,0 +1,100 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        # No GPU, no model, no Redis server: the test suite uses fakeredis and the
+        # in-process mock engine, so CI exercises the real pipeline end to end.
+        run: uv sync --extra worker --extra bench --extra dev
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Test
+        run: uv run pytest --basetemp=.pytest-tmp -q
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build gateway image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/docker/Dockerfile
+          target: gateway
+          push: false
+          load: true
+          tags: ocr-gateway:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build worker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/docker/Dockerfile
+          target: worker
+          push: false
+          load: true
+          tags: ocr-worker:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  e2e:
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s
+          --health-timeout 3s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - run: uv sync --extra worker --extra bench --extra dev
+
+      - name: Start mock engine, gateway and worker
+        env:
+          OCR_REDIS_URL: redis://localhost:6379/0
+          OCR_POSTGRES_ENABLED: "false"
+          OCR_ENGINE_BASE_URL: http://localhost:8001/v1
+          OCR_MODEL_ID: mock-ocr-vl
+          OCR_API_KEYS: dev-key:ci
+          OCR_LOG_FORMAT: text
+        run: |
+          uv run uvicorn ocr_serving.serving.mock.server:app --port 8001 &
+          uv run uvicorn ocr_serving.gateway.main:app --port 8080 &
+          uv run python -m ocr_serving.workers.cpu_worker &
+          for _ in $(seq 1 30); do
+            curl -sf http://localhost:8080/readyz && break
+            sleep 1
+          done
+
+      - name: End-to-end smoke
+        env:
+          OCR_REDIS_URL: redis://localhost:6379/0
+        run: uv run python scripts/smoke.py --gateway http://localhost:8080 --api-key dev-key

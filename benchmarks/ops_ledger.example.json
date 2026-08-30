@@ -1,0 +1,31 @@
+{
+  "_comment": "Copy to benchmarks/results/ops_ledger.json and fill in while the install is still fresh. This is the qualitative half of the comparison (PLAN.md §5); make report renders it as a table.",
+  "vllm": {
+    "install_minutes": null,
+    "control_plane_ram_gb": 0,
+    "config_loc": 12,
+    "moving_parts": 1,
+    "notes": "one process, one flag set; metrics free at /metrics"
+  },
+  "triton": {
+    "install_minutes": null,
+    "control_plane_ram_gb": null,
+    "config_loc": null,
+    "moving_parts": 3,
+    "notes": "model repository + config.pbtxt + OpenAI frontend process"
+  },
+  "ray_serve": {
+    "install_minutes": null,
+    "control_plane_ram_gb": null,
+    "config_loc": null,
+    "moving_parts": 4,
+    "notes": "head + replicas + dashboard; autoscaling and fractional GPU are config, not code"
+  },
+  "kserve": {
+    "install_minutes": null,
+    "control_plane_ram_gb": null,
+    "config_loc": null,
+    "moving_parts": 6,
+    "notes": "k3s, cert-manager, KServe controller, device plugin, HPA, isvc"
+  }
+}

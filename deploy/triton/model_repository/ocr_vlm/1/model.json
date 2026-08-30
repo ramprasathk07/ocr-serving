@@ -1,0 +1,7 @@
+{
+    "model": "PaddlePaddle/PaddleOCR-VL",
+    "gpu_memory_utilization": 0.85,
+    "max_model_len": 8192,
+    "trust_remote_code": true,
+    "disable_log_requests": true
+}
