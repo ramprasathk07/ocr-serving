@@ -1,6 +1,7 @@
 # Operations runbook
 
 Everything an on-call reader needs: how to start it, what breaks, and what to do about it.
+First time running the service? Start with the [testing walkthrough](testing.md).
 
 ## Start / stop
 

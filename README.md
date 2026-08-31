@@ -8,8 +8,8 @@ benchmark harness.
 The pipeline is the constant; the serving stack is the variable. That is the experiment.
 
 > Plan and schedule: [PLAN.md](PLAN.md) · Architecture: [docs/architecture.md](docs/architecture.md) ·
-> Operations runbook: [docs/operations.md](docs/operations.md) · Results: [docs/comparison.md](docs/comparison.md) ·
-> Diagrams: [docs/diagrams/](docs/diagrams/)
+> **Testing walkthrough: [docs/testing.md](docs/testing.md)** · Operations runbook: [docs/operations.md](docs/operations.md) ·
+> Results: [docs/comparison.md](docs/comparison.md) · Diagrams: [docs/diagrams/](docs/diagrams/)
 
 ---
 
@@ -205,8 +205,8 @@ that matter most: `OCR_ENGINE_BASE_URL` (which stack), `OCR_WORKER_CONCURRENCY` 
 ## Tests
 
 ```bash
-make test        # 79 tests, ~45s, no GPU / Redis / model required
-make lint
+make test        # 149 tests, ~90 s, no GPU / Redis / model required
+make lint        # 160 with a PostgreSQL server; see docs/testing.md
 ```
 
 `fakeredis` backs the queue and event streams; the mock engine is mounted in-process over an ASGI
@@ -237,7 +237,7 @@ deploy/                   everything ops-facing, nothing importable
 
 benchmarks/               harness · corpus builder · cold start · report generator
 scripts/                  end-to-end smoke client
-tests/                    95 tests — no GPU, Redis or model required
+tests/                    160 tests — no GPU, Redis or model required
 docs/                     architecture · operations runbook · comparison · blog outline
   diagrams/               architecture.drawio (3 pages), mermaid overview, design sketches
 ```
