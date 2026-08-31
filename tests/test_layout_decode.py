@@ -218,20 +218,21 @@ def test_session_receives_a_normalised_rgb_nchw_blob():
 
 def test_detect_returns_page_space_regions_in_reading_order():
     scale, pad_x, pad_y = letterbox_params()
+    # Continuous columns split by a full-height gutter — a real two-column page.
     raw = v10_tensor([
-        to_letterbox((420, 420, 780, 560), scale, pad_x, pad_y) + [0.9, TEXT],   # right, lower
-        to_letterbox((20, 120, 380, 260), scale, pad_x, pad_y) + [0.9, TEXT],    # left, upper
-        to_letterbox((420, 120, 780, 260), scale, pad_x, pad_y) + [0.9, TEXT],   # right, upper
-        to_letterbox((20, 420, 380, 560), scale, pad_x, pad_y) + [0.9, TEXT],    # left, lower
+        to_letterbox((420, 120, 780, 700), scale, pad_x, pad_y) + [0.9, TEXT],   # right column
+        to_letterbox((20, 430, 380, 700), scale, pad_x, pad_y) + [0.9, TEXT],    # left, lower
+        to_letterbox((20, 120, 380, 400), scale, pad_x, pad_y) + [0.9, TEXT],    # left, upper
     ])
     detector, _ = _detector_with(raw)
 
     regions = detector.detect(np.full((PAGE_H, PAGE_W, 3), 255, np.uint8))
 
-    assert len(regions) == 4
-    assert [r.order for r in regions] == [0, 1, 2, 3]
-    # Column-aware: both left-column regions come before the right column.
-    assert [r.bbox[0] < PAGE_W / 2 for r in regions] == [True, True, False, False]
+    assert len(regions) == 3
+    assert [r.order for r in regions] == [0, 1, 2]
+    # Down the left column, then the right.
+    assert [r.bbox[0] < PAGE_W / 2 for r in regions] == [True, True, False]
+    assert regions[0].bbox[1] < regions[1].bbox[1]
 
 
 def test_a_failing_session_falls_back_to_the_whole_page():

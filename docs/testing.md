@@ -19,12 +19,32 @@ download and no Kubernetes**; only level 2 needs the 3060.
 | Mock OCR engine (CPU) | **in the repo** | `ocr_serving.serving.mock.server` |
 | Grafana dashboard, alert rules, scrape config | **in the repo** | provisioned by compose |
 | OCR model weights (PaddleOCR-VL ≈ 2 GB) | **not present** | vLLM downloads from HuggingFace on first run |
-| Layout model `models/doclayout_yolo.onnx` | **not present, optional** | drop the file in; without it each page is one region |
+| Layout model `models/doclayout_yolo.onnx` | **not present, optional** | one `curl`, see below; without it each page is one region |
 | Benchmark corpus | **not present** | `benchmarks/build_corpus.py` builds it |
 | PostgreSQL | **optional** | compose; the service degrades to filesystem-only without it |
 
 Nothing is stubbed on the CPU path: with the mock engine every stage runs for
 real except the model itself.
+
+### Fetching the layout model (optional, 75 MB)
+
+Without it every page is sent to the engine as a single region, which is a valid
+way to run. With it, pages are segmented into titles, columns, tables and
+captions, and each region becomes its own streamed request.
+
+```bash
+mkdir -p models
+curl -L -o models/doclayout_yolo.onnx   https://huggingface.co/wybxc/DocLayout-YOLO-DocStructBench-onnx/resolve/main/doclayout_yolo_docstructbench_imgsz1024.onnx
+```
+
+Apache-2.0, an ONNX export of the official DocLayout-YOLO DocStructBench
+weights, `imgsz=1024` — which is what `OCR_LAYOUT_MODEL_PATH` and the detector's
+default input size expect. The worker logs `layout model loaded` at startup and
+`/readyz` is unaffected; without the file it logs `no layout model, using
+whole-page regions`.
+
+Verified on a two-column A4 page at 150 dpi: 7 regions (title, 4 text blocks,
+table, table caption) in ~2.6 s on CPU, ordered the way a person reads them.
 
 ## Environment
 
@@ -76,6 +96,20 @@ Four processes. Use four terminals, or run the first three in the background.
 ```bash
 docker run -d --rm --name ocr-redis -p 6379:6379 redis:7-alpine
 ```
+
+**Port already in use?** A native PostgreSQL or Redis service on the machine
+will already own 5432/6379, and the published container port silently loses —
+connections then hit the wrong server with confusing auth errors. The compose
+ports are configurable:
+
+```bash
+POSTGRES_PORT=5433 REDIS_PORT=6380 docker compose up -d
+# and point the services at them:
+export OCR_POSTGRES_DSN=postgresql://ocr:ocr@127.0.0.1:5433/ocr
+```
+
+Check what holds a port: `Get-NetTCPConnection -LocalPort 5432 -State Listen`
+(PowerShell) or `ss -lptn 'sport = :5432'` (Linux).
 
 **No Docker?** `fakeredis` ships a real TCP server and speaks streams and
 consumer groups, which is all the pipeline uses:
@@ -242,6 +276,31 @@ Panels to watch: **TTFT p50/p95**, **Pages by source** (the native/duplicate/
 blank share is the throughput story), **Queue** depth vs pending, **Engine
 tokens/s and in-flight**.
 
+Verify the wiring rather than eyeballing the charts:
+
+```bash
+# every target that should be up, is
+curl -s "localhost:9090/api/v1/targets?state=active" | jq -r   '.data.activeTargets[] | "\(.labels.job) \(.scrapeUrl) \(.health)"'
+
+# rules loaded, and nothing firing while the stack is healthy
+curl -s localhost:9090/api/v1/rules  | jq -r '.data.groups[].rules[] | "\(.name) \(.state)"'
+curl -s localhost:9090/api/v1/alerts | jq '.data.alerts | length'
+
+# Grafana provisioning
+curl -s -u admin:admin localhost:3000/api/datasources/uid/prometheus/health
+curl -s -u admin:admin "localhost:3000/api/search?query=" | jq -r '.[].title'
+```
+
+Expect `gateway` and `worker` **up** on `host.docker.internal` when you run them
+as host processes, and on the service names when you use
+`docker compose --profile app up`. Both targets are listed for each job so
+either layout works, so *the other one always reads down* — that is why the
+availability alerts aggregate with `max(up{...})` instead of matching a single
+target.
+
+The `vllm`, `triton`, `ray` and `kserve` targets read down by design: only one
+serving stack runs at a time.
+
 Metrics directly:
 
 ```bash
@@ -303,6 +362,8 @@ generator with a fixed cost model; it says nothing about the model or the GPU.
 | Stream returns nothing | job already finished | it replays from the start by default; check `GET /v1/ocr/{id}` |
 | `415` on a valid file | extension does not match content | the sniffer names the real type in the error |
 | Grafana panels empty | Prometheus cannot reach the host | confirm targets at <http://localhost:9090/targets> |
+| `password authentication failed` against compose PostgreSQL | a native PostgreSQL owns port 5432 | `POSTGRES_PORT=5433 docker compose up -d` and update the DSN |
+| `promtool: path 'M:/alerts.yml' does not exist` | Git Bash rewrites container paths | prefix the command with `MSYS_NO_PATHCONV=1` |
 
 Deeper failure modes, Redis inspection commands and the deploy checklist are in
 the [operations runbook](operations.md).

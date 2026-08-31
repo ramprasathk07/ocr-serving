@@ -178,3 +178,17 @@ def test_grafana_provisioning_points_at_this_dashboard():
     assert datasource["datasources"][0]["uid"] == "prometheus", (
         "panels reference the datasource by uid; it must be pinned, not auto-generated"
     )
+
+
+def test_availability_alerts_are_aggregated(alert_rules):
+    """A scrape job lists both the compose service and host.docker.internal so the
+    stack works either way — which means one target is always down. An alert on the
+    bare `up` series fires permanently; it has to aggregate."""
+    rules = {r["alert"]: r["expr"] for g in alert_rules["groups"] for r in g["rules"]}
+
+    for name in ("GatewayDown", "NoWorkerRunning"):
+        expr = rules[name]
+        assert "max(up{" in expr, f"{name} must aggregate over targets, got: {expr}"
+        assert not re.search(r"(?<!\()up\{job=\"\w+\"\}\s*==\s*0", expr), (
+            f"{name} still alerts on an individual target: {expr}"
+        )

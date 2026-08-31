@@ -20,7 +20,10 @@ x-app-env: &app-env
 services:
   redis:
     image: redis:7-alpine
-    ports: ["6379:6379"]
+    # Host ports are configurable: a native Redis/PostgreSQL install on the dev
+    # machine will already own the default port, and the published port silently
+    # loses the race — connections then hit the wrong server.
+    ports: ["${REDIS_PORT:-6379}:6379"]
     # appendonly: queued jobs and their state survive a restart of this container.
     command: redis-server --appendonly yes --maxmemory-policy noeviction
     volumes: [redis-data:/data]
@@ -32,7 +35,7 @@ services:
 
   postgres:
     image: postgres:16-alpine
-    ports: ["5432:5432"]
+    ports: ["${POSTGRES_PORT:-5432}:5432"]
     environment:
       POSTGRES_USER: ocr
       POSTGRES_PASSWORD: ocr

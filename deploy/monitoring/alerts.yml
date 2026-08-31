@@ -5,7 +5,10 @@ groups:
   - name: ocr-pipeline
     rules:
       - alert: GatewayDown
-        expr: up{job="gateway"} == 0
+        # Aggregated on purpose: the scrape job lists both the compose service and
+        # host.docker.internal so either layout works, which means one target is
+        # always down. Alert only when no gateway is reachable anywhere.
+        expr: max(up{job="gateway"}) == 0 or absent(up{job="gateway"})
         for: 1m
         labels: {severity: critical}
         annotations:
@@ -13,7 +16,7 @@ groups:
           description: "No /metrics from the gateway for 1 minute — the API is likely down."
 
       - alert: NoWorkerRunning
-        expr: absent(ocr_jobs_inflight) or up{job="worker"} == 0
+        expr: max(up{job="worker"}) == 0 or absent(up{job="worker"})
         for: 2m
         labels: {severity: critical}
         annotations:

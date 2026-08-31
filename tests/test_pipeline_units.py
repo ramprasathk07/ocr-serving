@@ -81,15 +81,44 @@ def test_detector_without_model_returns_whole_page():
 
 
 def test_reading_order_handles_two_columns():
+    """A real two-column page: the gutter runs the full height, so read down
+    the left column first. Note the columns are continuous — there is no
+    full-width horizontal gap, which is exactly what makes it two columns."""
     regions = [
-        Region(bbox=(320, 400, 580, 500)),   # right column, lower
-        Region(bbox=(20, 400, 280, 500)),    # left column, lower
-        Region(bbox=(320, 100, 580, 200)),   # right column, upper
-        Region(bbox=(20, 100, 280, 200)),    # left column, upper
+        Region(bbox=(320, 100, 580, 500)),   # right column, one long block
+        Region(bbox=(20, 310, 280, 500)),    # left column, lower paragraph
+        Region(bbox=(20, 100, 280, 290)),    # left column, upper paragraph
     ]
     ordered = assign_reading_order(regions, page_width=600)
-    assert [r.bbox[0] for r in ordered] == [20, 20, 320, 320]
-    assert [r.order for r in ordered] == [0, 1, 2, 3]
+    assert [r.bbox for r in ordered] == [
+        (20, 100, 280, 290), (20, 310, 280, 500), (320, 100, 580, 500)
+    ]
+    assert [r.order for r in ordered] == [0, 1, 2]
+
+
+def test_bands_separated_by_a_full_width_gap_are_read_in_rows():
+    """When an empty band crosses the whole page, the halves are sections, not
+    columns, and each is read left to right before moving down."""
+    regions = [
+        Region(bbox=(320, 400, 580, 500)),   # lower right
+        Region(bbox=(20, 400, 280, 500)),    # lower left
+        Region(bbox=(320, 100, 580, 200)),   # upper right
+        Region(bbox=(20, 100, 280, 200)),    # upper left
+    ]
+    ordered = assign_reading_order(regions, page_width=600)
+    assert [r.bbox[:2] for r in ordered] == [(20, 100), (320, 100), (20, 400), (320, 400)]
+
+
+def test_a_centred_title_narrower_than_the_page_still_comes_first():
+    """Regression: a title 54% of the page wide used to be filed as a
+    right-column element and came out after the whole left column."""
+    regions = [
+        Region(bbox=(20, 200, 280, 700)),    # left column
+        Region(bbox=(320, 200, 580, 700)),   # right column
+        Region(bbox=(140, 40, 460, 90)),     # centred title, 53% of the width
+    ]
+    ordered = assign_reading_order(regions, page_width=600)
+    assert ordered[0].bbox == (140, 40, 460, 90)
 
 
 def test_full_width_region_stays_ahead_of_columns():

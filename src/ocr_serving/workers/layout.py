@@ -197,30 +197,68 @@ class LayoutDetector:
 
 
 # ------------------------------------------------------------------- helpers
-def assign_reading_order(regions: list[Region], page_width: int) -> list[Region]:
-    """Column-aware ordering: split at the page midline, then top-to-bottom.
+def _widest_gap(regions: list[Region], axis: int) -> tuple[float, float] | None:
+    """Widest empty band across ``axis`` (0 = x, 1 = y) that no region crosses.
 
-    A single ``sorted(by y)`` interleaves the two columns of an academic paper
-    line by line and produces unreadable output; detecting the two-column case
-    from the x-centre distribution fixes the common case cheaply.
+    Returns ``(gap_width, cut_position)``, or ``None`` when the projections
+    cover the axis with no gap at all.
+    """
+    intervals = sorted((r.bbox[axis], r.bbox[axis + 2]) for r in regions)
+    best: tuple[float, float] | None = None
+    reach = intervals[0][1]
+    for start, end in intervals[1:]:
+        if start > reach:                      # nothing occupies [reach, start]
+            width = start - reach
+            if best is None or width > best[0]:
+                best = (width, (reach + start) / 2)
+        reach = max(reach, end)
+    return best
+
+
+def _xy_cut(regions: list[Region], min_gap: float, depth: int = 0) -> list[Region]:
+    """Recursive XY-cut: split on the widest empty band, vertical or horizontal.
+
+    Cutting on whichever gap is wider is what makes this work for both page
+    shapes without a special case. A two-column article has a gutter running the
+    full height, so the vertical gap wins and the left column is emitted before
+    the right. A page broken up by a full-width table or title has no such
+    gutter, so the horizontal gap wins and the page is read band by band.
+    """
+    if len(regions) <= 1 or depth >= 16:
+        return sorted(regions, key=lambda r: (r.bbox[1], r.bbox[0]))
+
+    vertical = _widest_gap(regions, axis=0)
+    horizontal = _widest_gap(regions, axis=1)
+    candidates = [c for c in ((vertical, 0), (horizontal, 1)) if c[0] and c[0][0] >= min_gap]
+    if not candidates:
+        return sorted(regions, key=lambda r: (r.bbox[1], r.bbox[0]))
+
+    (_, cut), axis = max(candidates, key=lambda c: c[0][0])
+    near = [r for r in regions if (r.bbox[axis] + r.bbox[axis + 2]) / 2 < cut]
+    far = [r for r in regions if (r.bbox[axis] + r.bbox[axis + 2]) / 2 >= cut]
+    if not near or not far:                    # degenerate split, stop recursing
+        return sorted(regions, key=lambda r: (r.bbox[1], r.bbox[0]))
+
+    return _xy_cut(near, min_gap, depth + 1) + _xy_cut(far, min_gap, depth + 1)
+
+
+def assign_reading_order(regions: list[Region], page_width: int) -> list[Region]:
+    """Order regions the way a person reads the page.
+
+    Sorting by ``y`` alone interleaves the two columns of an academic paper line
+    by line and produces unreadable output. The previous fix — assign every
+    region to a column by its centre relative to the page midline — broke on the
+    first real page it saw: a centred title 54% of the page wide fell just under
+    the "full width" threshold, was filed as a right-column element, and came
+    out fifth instead of first.
+
+    XY-cut has no such threshold. It splits the page on whichever empty band is
+    widest and recurses, so bands and columns fall out of the geometry itself.
     """
     if not regions:
         return regions
-    mid = page_width / 2
-    centres = [(r.bbox[0] + r.bbox[2]) / 2 for r in regions]
-    spans = [(r.bbox[2] - r.bbox[0]) / page_width for r in regions]
-    pairs = list(zip(centres, spans, strict=True))
-    left = sum(1 for c, s in pairs if c < mid and s < 0.55)
-    right = sum(1 for c, s in pairs if c >= mid and s < 0.55)
-    two_column = left >= 2 and right >= 2
 
-    def key(r: Region) -> tuple:
-        x_centre = (r.bbox[0] + r.bbox[2]) / 2
-        width_frac = (r.bbox[2] - r.bbox[0]) / page_width
-        column = 0 if (not two_column or width_frac >= 0.55 or x_centre < mid) else 1
-        return (column, r.bbox[1], r.bbox[0])
-
-    ordered = sorted(regions, key=key)
+    ordered = _xy_cut(regions, min_gap=max(page_width * 0.01, 8))
     for i, region in enumerate(ordered):
         region.order = i
     return ordered
