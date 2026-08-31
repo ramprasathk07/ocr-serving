@@ -105,6 +105,8 @@ class Settings(BaseSettings):
     # ---------------------------------------------------------------- artifacts
     searchable_pdf: bool = True
     result_ttl_days: int = 7
+    #: Periodic disk cleanup in the worker. 0 disables the sweep.
+    retention_sweep_hours: float = 6.0
 
     api_title: str = "XFinite-OCR Gateway"
     api_version: str = "1.0.0"

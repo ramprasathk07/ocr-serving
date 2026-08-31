@@ -209,7 +209,7 @@ def test_session_receives_a_normalised_rgb_nchw_blob():
     blob = session.blob
     assert blob.shape == (1, 3, INPUT, INPUT)
     assert blob.dtype == np.float32
-    assert 0.0 <= blob.min() and blob.max() <= 1.0
+    assert blob.min() >= 0.0 and blob.max() <= 1.0
     # Channel 2 of the blob is the image's channel 0 (BGR -> RGB), i.e. the 10s.
     centre = blob[0, :, INPUT // 2, INPUT // 2]
     assert centre[2] == pytest.approx(10 / 255, abs=1e-3)

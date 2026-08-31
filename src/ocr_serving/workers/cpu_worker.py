@@ -54,11 +54,14 @@ from ocr_serving.common.metrics import (
     QUEUE_PENDING,
     QUEUE_WAIT_SECONDS,
     RENDER_SECONDS,
+    RETENTION_REMOVED,
+    STORAGE_BYTES,
     serve_worker_metrics,
 )
 from ocr_serving.common.queue import JobQueue, QueuedJob
 from ocr_serving.common.ratelimit import PageQuota
 from ocr_serving.common.redis_client import close_redis, get_redis
+from ocr_serving.common.retention import sweep as retention_sweep
 from ocr_serving.common.schemas import (
     Artifacts,
     EventType,
@@ -196,6 +199,7 @@ class Worker:
             asyncio.create_task(self._heartbeat_loop(), name="heartbeat"),
             asyncio.create_task(self._reclaim_loop(), name="reclaim"),
             asyncio.create_task(self._metrics_loop(), name="queue-metrics"),
+            asyncio.create_task(self._retention_loop(), name="retention"),
         ]
         try:
             while not self._stopping.is_set():
@@ -255,6 +259,41 @@ class Worker:
                     task.add_done_callback(lambda _t: self._sem.release())
             except Exception as exc:
                 log.warning("reclaim loop error", extra={"reclaim_error": str(exc)})
+
+    async def _retention_loop(self) -> None:
+        """Delete blobs past the retention window so the volume cannot fill.
+
+        Runs in this worker rather than a separate cron: it is the process that
+        writes the files, it already has the settings, and with several workers
+        the sweep is idempotent — whoever gets there first deletes.
+        """
+        interval = self.s.retention_sweep_hours * 3600
+        if interval <= 0:
+            log.info("retention sweep disabled")
+            return
+        while True:
+            await asyncio.sleep(interval)
+            if self._stopping.is_set():
+                return
+            try:
+                result = await asyncio.to_thread(retention_sweep, self.s)
+            except Exception as exc:
+                log.warning("retention sweep error", extra={"sweep_error": str(exc)})
+                continue
+            for kind, count in result.removed.items():
+                if count:
+                    RETENTION_REMOVED.labels(kind=kind).inc(count)
+            STORAGE_BYTES.set(result.remaining_bytes)
+            if result.total_removed:
+                log.info(
+                    "retention sweep",
+                    extra={
+                        "removed": result.total_removed,
+                        "freed_mb": round(result.freed_bytes / 1e6, 1),
+                        "remaining_mb": round(result.remaining_bytes / 1e6, 1),
+                        "older_than_days": self.s.result_ttl_days,
+                    },
+                )
 
     async def _metrics_loop(self) -> None:
         while True:

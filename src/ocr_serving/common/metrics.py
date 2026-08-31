@@ -61,6 +61,12 @@ QUEUE_DEPTH = Gauge("ocr_queue_depth", "Jobs waiting in the queue (undelivered)"
 QUEUE_PENDING = Gauge("ocr_queue_pending", "Jobs delivered but not yet acknowledged")
 QUEUE_DEAD = Gauge("ocr_queue_dead", "Jobs in the dead-letter stream")
 
+# ------------------------------------------------------------------- storage
+RETENTION_REMOVED = Counter(
+    "ocr_retention_removed_total", "Blobs deleted by the retention sweep", ["kind"]
+)
+STORAGE_BYTES = Gauge("ocr_storage_bytes", "Bytes held in the blob store after the last sweep")
+
 # ------------------------------------------------------------------- gateway
 HTTP_REQUESTS = Counter(
     "ocr_http_requests_total", "Gateway HTTP requests", ["method", "path", "status"]
