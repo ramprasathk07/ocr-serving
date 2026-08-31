@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
 
+from ocr_serving.common.filetype import HEAD_BYTES
+
 CHUNK = 1 << 20  # 1 MiB
 
 
@@ -30,6 +32,9 @@ class StoredBlob:
     path: Path
     size: int
     sha256: str
+    #: First bytes as they arrived, so the caller can verify the content type
+    #: without re-opening the file.
+    head: bytes = b""
 
 
 class LocalBlobStore:
@@ -53,24 +58,31 @@ class LocalBlobStore:
         dest.parent.mkdir(parents=True, exist_ok=True)
         digest = hashlib.sha256()
         size = 0
+        head = bytearray()
         try:
             with dest.open("wb") as fh:
                 async for chunk in chunks:
                     size += len(chunk)
                     if max_bytes is not None and size > max_bytes:
                         raise UploadTooLarge(max_bytes)
+                    if len(head) < HEAD_BYTES:
+                        head.extend(chunk[: HEAD_BYTES - len(head)])
                     digest.update(chunk)
                     fh.write(chunk)
         except BaseException:
             dest.unlink(missing_ok=True)
             raise
-        return StoredBlob(key=key, path=dest, size=size, sha256=digest.hexdigest())
+        return StoredBlob(
+            key=key, path=dest, size=size, sha256=digest.hexdigest(), head=bytes(head)
+        )
 
     def put_bytes(self, key: str, data: bytes) -> StoredBlob:
         dest = self.path_for(key)
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(data)
-        return StoredBlob(key, dest, len(data), hashlib.sha256(data).hexdigest())
+        return StoredBlob(
+            key, dest, len(data), hashlib.sha256(data).hexdigest(), data[:HEAD_BYTES]
+        )
 
     def open(self, key: str) -> BinaryIO:
         return self.path_for(key).open("rb")

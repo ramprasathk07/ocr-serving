@@ -47,6 +47,7 @@ from ocr_serving.common import events
 from ocr_serving.common.config import get_settings
 from ocr_serving.common.db import Database
 from ocr_serving.common.engine import client_from_settings
+from ocr_serving.common.filetype import describe, matches_extension
 from ocr_serving.common.logging import get_logger, setup_logging
 from ocr_serving.common.metrics import (
     BUILD_INFO,
@@ -208,6 +209,16 @@ async def submit(
     if blob.size == 0:
         request.app.state.blobs.delete(blob.key)
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "empty upload")
+
+    # Trusting the extension would hand a mislabelled file straight to pymupdf or
+    # OpenCV; check the magic bytes at the door instead.
+    if not matches_extension(suffix, blob.head):
+        request.app.state.blobs.delete(blob.key)
+        RATE_LIMITED.labels(reason="content_mismatch").inc()
+        raise HTTPException(
+            status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            f"content is {describe(blob.head)}, which does not match the {suffix} extension",
+        )
     UPLOAD_BYTES.observe(blob.size)
 
     # Quota is charged in pages, so count them before accepting the job.

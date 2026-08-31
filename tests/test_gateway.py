@@ -66,10 +66,38 @@ async def test_unsupported_extension(api):
     assert response.status_code == 415
 
 
-async def test_corrupt_pdf_is_rejected_before_queueing(api, redis_client):
+async def test_content_that_is_not_a_pdf_is_rejected_at_the_door(api, redis_client):
+    """Magic bytes, not the extension: this never reaches pymupdf."""
     response = await api.post("/v1/ocr", files=_upload(data=b"not really a pdf"), headers=AUTH)
+
+    assert response.status_code == 415
+    assert "does not match" in response.json()["detail"]
+    assert await redis_client.xlen("ocr:jobs") == 0
+
+
+async def test_a_png_renamed_to_pdf_is_rejected(api, sample_png, redis_client):
+    files = {"file": ("sneaky.pdf", sample_png, "application/pdf")}
+    response = await api.post("/v1/ocr", files=files, headers=AUTH)
+
+    assert response.status_code == 415
+    assert "png" in response.json()["detail"]
+    assert await redis_client.xlen("ocr:jobs") == 0
+
+
+async def test_a_truncated_but_genuine_pdf_still_fails_validation(api, redis_client):
+    """Right magic bytes, unreadable document — caught by the page probe, not the sniffer."""
+    response = await api.post(
+        "/v1/ocr", files=_upload(data=b"%PDF-1.4 truncated right here"), headers=AUTH
+    )
+
     assert response.status_code == 400
     assert await redis_client.xlen("ocr:jobs") == 0
+
+
+async def test_a_real_png_upload_is_accepted(api, sample_png):
+    files = {"file": ("page.png", sample_png, "image/png")}
+    response = await api.post("/v1/ocr", files=files, headers=AUTH)
+    assert response.status_code == 202
 
 
 async def test_oversized_upload(api, text_pdf, monkeypatch):
