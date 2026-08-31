@@ -12,6 +12,7 @@ strip will otherwise blow past the vision encoder budget.
 """
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import cv2
@@ -50,6 +51,81 @@ def _nms(boxes: np.ndarray, scores: np.ndarray, iou_threshold: float) -> list[in
     if len(idxs) == 0:
         return []
     return [int(i) for i in np.array(idxs).reshape(-1)]
+
+
+#: Smallest region worth an engine call, in page pixels.
+MIN_REGION_PX = 16
+
+
+def decode_detections(
+    raw: np.ndarray,
+    *,
+    scale: float,
+    pad_x: int,
+    pad_y: int,
+    width: int,
+    height: int,
+    score_threshold: float,
+    iou_threshold: float,
+) -> list[Region]:
+    """Turn a raw YOLO output tensor into page-space regions.
+
+    Kept separate from the session call because this is where the mistakes live:
+    two different export layouts, letterbox padding to undo, a scale to divide
+    out, and NMS that must run for one layout and must not for the other.
+
+    Handles both exports seen in the wild:
+
+    * **v10-style** ``(N, 6)`` — ``x0, y0, x1, y1, score, class``, already
+      NMS-free, boxes in letterbox pixel space;
+    * **v8-style** ``(4 + C, N)`` — ``cx, cy, w, h`` plus per-class scores,
+      needing a transpose, an argmax and NMS.
+    """
+    if raw.ndim != 2:
+        raise ValueError(f"unexpected layout output shape {raw.shape}")
+
+    feature_axis_len = 4 + len(CLASS_NAMES)
+    if raw.shape[-1] == 6 and raw.shape[0] != feature_axis_len:
+        boxes = raw[:, :4].astype(np.float32)
+        scores = raw[:, 4].astype(np.float32)
+        classes = raw[:, 5].astype(int)
+        needs_nms = False
+    else:
+        # The feature axis is the one that matches 4 + C; fall back to the
+        # shorter axis, which is what every real export has.
+        pred = raw.T if raw.shape[0] == feature_axis_len or raw.shape[0] < raw.shape[1] else raw
+        cx, cy, bw, bh = pred[:, 0], pred[:, 1], pred[:, 2], pred[:, 3]
+        cls_scores = pred[:, 4:]
+        classes = cls_scores.argmax(axis=1)
+        scores = cls_scores.max(axis=1).astype(np.float32)
+        boxes = np.stack([cx - bw / 2, cy - bh / 2, cx + bw / 2, cy + bh / 2], axis=1)
+        needs_nms = True
+
+    keep = scores >= score_threshold
+    boxes, scores, classes = boxes[keep], scores[keep], classes[keep]
+    if len(boxes) == 0:
+        return []
+    if needs_nms:
+        sel = _nms(boxes, scores, iou_threshold)
+        boxes, scores, classes = boxes[sel], scores[sel], classes[sel]
+
+    regions: list[Region] = []
+    for (x0, y0, x1, y1), score, cls_id in zip(boxes, scores, classes, strict=True):
+        name = CLASS_NAMES[cls_id] if 0 <= cls_id < len(CLASS_NAMES) else "text"
+        if name in SKIP_CLASSES:
+            continue
+        # Floor the near corner and ceil the far one: truncating both would bias
+        # every box up and left by a pixel and clip ascenders off the top line.
+        bbox = (
+            max(int(math.floor((x0 - pad_x) / scale)), 0),
+            max(int(math.floor((y0 - pad_y) / scale)), 0),
+            min(int(math.ceil((x1 - pad_x) / scale)), width),
+            min(int(math.ceil((y1 - pad_y) / scale)), height),
+        )
+        if bbox[2] - bbox[0] < MIN_REGION_PX or bbox[3] - bbox[1] < MIN_REGION_PX:
+            continue
+        regions.append(Region(bbox=bbox, cls=name, score=float(score)))
+    return regions
 
 
 class LayoutDetector:
@@ -105,47 +181,19 @@ class LayoutDetector:
         return assign_reading_order(regions, w)
 
     def _detect_onnx(self, img: np.ndarray) -> list[Region]:
-        h, w = img.shape[:2]
         canvas, scale, pad_x, pad_y = _letterbox(img, self.input_size)
         blob = canvas[:, :, ::-1].transpose(2, 0, 1)[None].astype(np.float32) / 255.0
         raw = self.session.run(None, {self.input_name: blob})[0]
-        raw = np.squeeze(raw)
-
-        # YOLOv10-style export: (N, 6) = x0,y0,x1,y1,score,cls — already NMS-free.
-        # YOLOv8-style export: (4+C, N) — transpose, argmax over classes, then NMS.
-        if raw.ndim == 2 and raw.shape[-1] == 6:
-            boxes, scores, classes = raw[:, :4], raw[:, 4], raw[:, 5].astype(int)
-        elif raw.ndim == 2:
-            pred = raw.T if raw.shape[0] < raw.shape[1] else raw
-            cx, cy, bw, bh = pred[:, 0], pred[:, 1], pred[:, 2], pred[:, 3]
-            cls_scores = pred[:, 4:]
-            classes = cls_scores.argmax(axis=1)
-            scores = cls_scores.max(axis=1)
-            boxes = np.stack([cx - bw / 2, cy - bh / 2, cx + bw / 2, cy + bh / 2], axis=1)
-        else:
-            raise ValueError(f"unexpected layout output shape {raw.shape}")
-
-        keep = scores >= self.score_threshold
-        boxes, scores, classes = boxes[keep], scores[keep], classes[keep]
-        if len(boxes) == 0:
-            return []
-        if raw.shape[-1] != 6:
-            sel = _nms(boxes, scores, self.iou_threshold)
-            boxes, scores, classes = boxes[sel], scores[sel], classes[sel]
-
-        regions: list[Region] = []
-        for (x0, y0, x1, y1), score, cls_id in zip(boxes, scores, classes, strict=False):
-            name = CLASS_NAMES[cls_id] if 0 <= cls_id < len(CLASS_NAMES) else "text"
-            if name in SKIP_CLASSES:
-                continue
-            bbox = (
-                int(max((x0 - pad_x) / scale, 0)), int(max((y0 - pad_y) / scale, 0)),
-                int(min((x1 - pad_x) / scale, w)), int(min((y1 - pad_y) / scale, h)),
-            )
-            if bbox[2] - bbox[0] < 16 or bbox[3] - bbox[1] < 16:
-                continue
-            regions.append(Region(bbox=bbox, cls=name, score=float(score)))
-        return regions
+        return decode_detections(
+            np.squeeze(raw),
+            scale=scale,
+            pad_x=pad_x,
+            pad_y=pad_y,
+            width=img.shape[1],
+            height=img.shape[0],
+            score_threshold=self.score_threshold,
+            iou_threshold=self.iou_threshold,
+        )
 
 
 # ------------------------------------------------------------------- helpers
