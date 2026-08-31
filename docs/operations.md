@@ -74,8 +74,9 @@ In-flight jobs are lost: state, queue entries and events all live there. Uploads
 disk survive, and completed jobs remain readable from PostgreSQL through `GET /v1/ocr/{id}`.
 
 **Disk filling.**
-`storage/uploads` and `storage/artifacts` grow without bound. `LocalBlobStore.purge_older_than`
-implements the sweep; schedule it against `OCR_RESULT_TTL_DAYS`.
+The worker sweeps blobs older than `OCR_RESULT_TTL_DAYS` every `OCR_RETENTION_SWEEP_HOURS`
+(6 h default). Check `ocr_storage_bytes` and `ocr_retention_removed_total`; if the sweep is not
+running, the worker log line is `retention sweep disabled` and the interval is set to 0.
 
 ## Useful Redis commands
 
