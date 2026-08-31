@@ -41,6 +41,12 @@ jobs:
       - name: Lint
         run: uv run ruff check .
 
+      - name: Check alert rules
+        # Expression syntax and duration formats are things only Prometheus can judge;
+        # the structural checks live in tests/test_monitoring_config.py.
+        run: |
+          docker run --rm -v "$PWD/deploy/monitoring:/m:ro"             --entrypoint promtool prom/prometheus:latest check rules /m/alerts.yml
+
       - name: Test
         env:
           OCR_TEST_POSTGRES_DSN: postgresql://ocr:ocr@localhost:5432/ocr_test

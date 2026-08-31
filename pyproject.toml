@@ -55,6 +55,8 @@ dev = [
     "lupa>=2.2",
     "ruff>=0.6",
     "websockets>=12",
+    # The monitoring-config tests parse prometheus.yml and the provisioning files.
+    "pyyaml>=6.0",
 ]
 
 [project.scripts]
